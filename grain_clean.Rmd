@@ -1,0 +1,1703 @@
+---
+title: "The potential of reintegration of fallow soils into agronomic practice: the influence of biopreparation on soil microbiome and wheat crop efficiency"
+subtitle: 'Revision round 2'
+author: "Grigory Gladkov"
+email: "ruginodis@gmail.com"
+date: "2023-07-16"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+    toc_depth: 5
+    number_sections: true
+    theme: lumen
+    code_folding: hide
+---
+
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+options(getClass.msg=FALSE)
+knitr::opts_knit$set(root.dir = "~/storage/rnf_2023/")
+rmarkdown::find_pandoc(dir = "/home/gladkov/.conda/envs/bi/bin")
+source('~/storage/scripts_git_done/functions.R', local = knitr::knit_global())
+
+```
+
+## import libraries
+
+
+```{r}
+
+require(dada2)
+require(Biostrings)
+require(DECIPHER)
+require(phyloseq)
+require(seqinr)
+require(data.table)
+require(metagMisc)
+require(tibble)
+library(phyloseq)
+library(vegan)
+library(ampvis2)
+library(vegan)
+library(metagMisc)
+library(SpiecEasi)
+library(igraph)
+library(GGally)
+library(tidyverse)
+library(ggrepel)
+
+```
+
+### preprocessing metadata
+
+```{r}
+
+ps.gra <- readRDS("ps.gra")
+
+ps.gra@sam_data <- ps.gra@sam_data %>%
+  data.frame() %>% 
+  mutate(Group = fct_recode(Group, !!!c("FA_W" = "B1",
+                                        "FA_0" = "B1_0",
+                                        "FA_C" = "B1K",
+                                        "FA_WP" = "B1e",
+                                        "FI_0" = "B2_0",
+                                        "FI_C" = "B2K",
+                                        "FI_W" = "B2",
+                                        "FI_WP" = "B2e",
+                                        "FO_0" = "B3_0",
+                                        "FO_C" = "B3K",
+                                        "FO_W" = "B3",
+                                        "FO_WP" = "B3e"))) %>% 
+           mutate(soil_type = fct_recode(soil_type, !!!c("FA" = "fallow",
+                                        "FI" = "field",
+                                        "FO" = "forest"))  
+         ) %>% 
+    mutate(Group = fct_relevel(Group, c('FI_0', 'FI_C', 'FI_W', 'FI_WP', 'FA_0', 'FA_C', 'FA_W', 'FA_WP', 'FO_0', 'FO_C', 'FO_W', 'FO_WP'))) %>% 
+    mutate(soil_type = fct_relevel(soil_type, c('FI', 'FA', 'FO'))) %>% 
+  sam_data()
+
+
+ps.gra@sam_data
+
+```
+
+## basic IDE
+
+```{r, fig.width=12, fig.height=10}
+
+plot_rich_reads_samlenames_lm(ps.gra, group = "Group", label = "Group", delimiter="bakumov.")  
+
+```
+
+
+
+```{r, fig.width=9, fig.height=8}
+
+ps.gra.clr <- ps.gra
+ps.otu.clr <- as.data.frame(t(ps.gra@otu_table)) %>% 
+  compositions::clr() %>% 
+  t()
+ps.gra.r <- rarefy_even_depth(ps.gra)
+
+ps.gra.clr@otu_table <-  otu_table(ps.otu.clr, taxa_are_rows = FALSE)
+
+beta_custom_norm_PCA_elli_w(ps.gra.clr, Group = 'Group', Color = 'wheat')
+beta_custom_norm_PCoA_elli_w(ps.gra.r, Group = 'Group', Color = 'wheat')
+# beta_custom_norm_NMDS_elli_w(ps.gra.clr, Group = 'Group', Color = 'wheat')
+
+beta_custom_norm_NMDS_elli_w(ps.gra, Group = 'Group', Color = 'wheat')
+
+```
+
+
+
+```{r, fig.width=12, fig.height=6}
+
+plot_alpha_w_toc_mod <- function(ps, group, metric) {
+  
+  require(phyloseq)
+  require(ggplot2)
+  
+  ps_a <- prune_taxa(taxa_sums(ps) > 0, ps)
+  
+  er <- estimate_richness(ps_a)
+  df_er <- cbind(ps_a@sam_data, er)
+  df_er <- df_er %>% dplyr::select(c(group, metric))
+  stat.test <- aov(as.formula(paste0(metric, "~", group)), data = df_er) %>%
+    rstatix::tukey_hsd() %>%
+    filter(p.adj.signif != "ns")
+  y <-  seq(max(er[[metric]]), length=length(stat.test$p.adj), by=max(er[[metric]]/20))
+
+  plot_richness(ps_a, x=group, measures=metric, color="Group") + 
+    geom_boxplot() +
+    geom_point(size=1.2, alpha=0.3) +
+    # ggpubr::stat_pvalue_manual(
+    #   stat.test,
+    #   label = "p.adj.signif",
+    #   y.position = y,
+    #   tip.length = 0.005,
+    #   bracket.nudge.y = 1.5,
+    #   vjust = 0.6,
+    #   size = 3) +
+    theme_light() + 
+        scale_colour_viridis_d(option = "magma", 
+                       aesthetics = "color", 
+                       begin = 0, 
+                       end = 0.8) +
+    theme(axis.text.x = element_text(size=12, angle = 45, hjust=1),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+          legend.position = "None") +
+    labs(y=paste(metric, "index")) +
+    theme(strip.text = element_text(size = 15))
+}
+
+
+p_a1 <-  plot_alpha_w_toc_mod(ps.gra.r, group="Group",  metric="Observed") 
+p_a2 <- plot_alpha_w_toc_mod(ps.gra.r, group="Group", metric="Shannon") 
+p_a3 <- plot_alpha_w_toc_mod(ps.gra.r, group="Group", metric="InvSimpson") 
+
+p_alpha <- ggpubr::ggarrange(p_a1, p_a2, p_a3, nrow = 1)
+p_alpha
+```
+
+```{r, fig.width=6, fig.height=6}
+
+plot_alpha_w_toc_stats <- function(ps, group, metric) {
+  
+  require(phyloseq)
+  require(ggplot2)
+  
+  ps_a <- prune_taxa(taxa_sums(ps) > 0, ps)
+  
+  er <- estimate_richness(ps_a)
+  df_er <- cbind(ps_a@sam_data, er)
+  df_er <- df_er %>% dplyr::select(c(group, metric))
+  stat.test <- aov(as.formula(paste0(metric, "~", group)), data = df_er) %>%
+    rstatix::tukey_hsd() %>%
+    filter(p.adj.signif != "ns")
+  y <-  seq(max(er[[metric]]), length=length(stat.test$p.adj), by=max(er[[metric]]/20))
+  return(stat.test)
+  plot_richness(ps_a, x=group, measures=metric, color="Group") + 
+    geom_boxplot(aes(color = group)) +
+    geom_point(size=1.2, alpha=0.3) +
+    ggpubr::stat_pvalue_manual(
+      stat.test,
+      label = "p.adj.signif",
+      y.position = y,
+      tip.length = 0.005,
+      bracket.nudge.y = 1.5,
+      vjust = 0.6,
+      size = 3) +
+    theme_light() + 
+        scale_colour_viridis_d(option = "magma", 
+                       aesthetics = "color", 
+                       begin = 0, 
+                       end = 0.8) +
+    theme(axis.text.x = element_text(size=12, angle = 45, hjust=1),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+          legend.position = "None") +
+    labs(y=paste(metric, "index")) 
+}
+
+
+
+plot_alpha_w_toc_stats(ps.gra, group="soil_type",  metric="Observed") 
+plot_alpha_w_toc_stats(ps.gra, group="soil_type",  metric="Shannon") 
+plot_alpha_w_toc_stats(ps.gra, group="soil_type",  metric="InvSimpson") 
+
+
+```
+
+
+```{r, fig.width=12, fig.height=20}
+
+
+amp.gra <- phyloseq_to_ampvis2(ps.gra)
+
+# ampvis2::amp_heatmap(amp.gra %>%  ampvis2::amp_filter_samples(soil_type == "forest", normalise = TRUE),
+#             tax_show = 70,
+#             normalise = FALSE,
+#             tax_aggregate = "Genus",
+#             tax_add = "Phylum",
+#             group_by = "Group",
+#             plot_values_size = 6, facet_by = "soil_type",
+#             showRemainingTaxa = TRUE)
+
+ampvis2::amp_heatmap(amp.gra,
+            tax_show = 70,
+            normalise = TRUE,
+            tax_aggregate = "Genus",
+            tax_add = "Phylum",
+            group_by = "Group",
+            plot_values_size = 4, facet_by = "soil_type",
+            showRemainingTaxa = TRUE)
+
+
+```
+
+
+```{r, fig.width=12, fig.height=4}
+
+ps.gra.s <- prune_samples(sample_data(ps.gra.r)$preparation == 'true', ps.gra.r)
+ps.gra.s  <- prune_taxa(taxa_sums(ps.gra.s) > 0, ps.gra.s)
+
+ps.gra.fie.r <- prune_samples(sample_data(ps.gra.r)$soil_type == 'FI', ps.gra.r)
+ps.gra.fie.r  <- prune_taxa(taxa_sums(ps.gra.fie.r) > 0, ps.gra.fie.r)
+
+ps.gra.for.r <- prune_samples(sample_data(ps.gra.r)$soil_type == 'FO', ps.gra.r)
+ps.gra.for.r  <- prune_taxa(taxa_sums(ps.gra.for.r) > 0, ps.gra.for.r)
+
+ps.gra.fal.r <- prune_samples(sample_data(ps.gra.r)$soil_type == 'FA', ps.gra.r)
+ps.gra.fal.r  <- prune_taxa(taxa_sums(ps.gra.fal.r) > 0, ps.gra.fal.r)
+
+ps.gra.fie <- prune_samples(sample_data(ps.gra)$soil_type == 'FI', ps.gra)
+ps.gra.fie  <- prune_taxa(taxa_sums(ps.gra.fie) > 0, ps.gra.fie)
+
+ps.gra.for <- prune_samples(sample_data(ps.gra)$soil_type == 'FO', ps.gra)
+ps.gra.for  <- prune_taxa(taxa_sums(ps.gra.for) > 0, ps.gra.for)
+
+ps.gra.fal <- prune_samples(sample_data(ps.gra)$soil_type == 'FA', ps.gra)
+ps.gra.fal  <- prune_taxa(taxa_sums(ps.gra.fal) > 0, ps.gra.fal)
+
+```
+
+
+
+```{r, fig.width=10, fig.height=9}
+
+ps.gra.sep <- ps.gra.fal.r
+
+p_a1 <-  plot_alpha_w_toc_mod(ps.gra.sep, group="Group",  metric="Observed") 
+p_a2 <- plot_alpha_w_toc_mod(ps.gra.sep, group="Group", metric="Shannon") 
+p_a3 <- plot_alpha_w_toc_mod(ps.gra.sep, group="Group", metric="InvSimpson") 
+
+a <- ggpubr::ggarrange(p_a1, p_a2, p_a3, nrow = 1)
+
+ps.gra.sep <- ps.gra.fie.r
+p_a1 <-  plot_alpha_w_toc_mod(ps.gra.sep, group="Group",  metric="Observed") 
+p_a2 <- plot_alpha_w_toc_mod(ps.gra.sep, group="Group", metric="Shannon") 
+p_a3 <- plot_alpha_w_toc_mod(ps.gra.sep, group="Group", metric="InvSimpson") 
+
+b <- ggpubr::ggarrange(p_a1, p_a2, p_a3, nrow = 1)
+
+ps.gra.sep <- ps.gra.for.r
+p_a1 <-  plot_alpha_w_toc_mod(ps.gra.sep, group="Group",  metric="Observed") 
+p_a2 <- plot_alpha_w_toc_mod(ps.gra.sep, group="Group", metric="Shannon") 
+p_a3 <- plot_alpha_w_toc_mod(ps.gra.sep, group="Group", metric="InvSimpson") 
+
+c <- ggpubr::ggarrange(p_a1, p_a2, p_a3, nrow = 1)
+ 
+ggpubr::ggarrange( b, a, c, nrow = 3)
+
+```
+
+
+```{r, fig.width=12, fig.height=4}
+
+beta_custom_norm_PCoA_elli_w <- function(ps, seed = 7888, normtype="vst", Color="What", Group="Repeat"){
+  require(phyloseq)
+  require(ggplot2)
+  require(ggpubr)
+  library(ggforce)
+  
+  ps@otu_table[ps@otu_table < 0] <- 0
+  ordination.b <- ordinate(ps, "PCoA", "bray")
+  mds <- as.data.frame(ordination.b$points)
+  p  <-  plot_ordination(ps,
+                         ordination.b,
+                         type="sample",
+                         color = Color,
+                         title="PCoA - bray - rarefied",
+                         # title=NULL,
+                         axes = c(1,2) ) + 
+    theme_bw() + 
+    theme(text = element_text(size = 10)) + 
+    geom_point(size = 3) +
+    geom_mark_ellipse(aes_string(group = Group, label = Group),
+                      label.fontsize = 12,
+                      label.buffer = unit(2, "mm"),
+                      label.minwidth = unit(5, "mm"),
+                      con.cap = unit(0.1, "mm"),
+                      con.colour='gray') +
+    theme(legend.position = "none",         
+          axis.title = element_text(size=12),
+          axis.text = element_text(size=10)) +
+    scale_colour_viridis_d(option = "magma", 
+                       aesthetics = "color", 
+                       begin = 0, 
+                       end = 0.8)
+  
+  return(p)
+}
+
+
+beta_fal <- beta_custom_norm_PCoA_elli_w(ps.gra.fal.r, Group = 'Group', Color = 'wheat')
+beta_fie <- beta_custom_norm_PCoA_elli_w(ps.gra.fie.r, Group = 'Group', Color = 'wheat')
+beta_for <- beta_custom_norm_PCoA_elli_w(ps.gra.for.r, Group = 'Group', Color = 'wheat')
+
+ggpubr::ggarrange(beta_fie, beta_fal, beta_for, ncol = 3)
+
+```
+
+
+```{r}
+
+ps.anc.liv <- ps.gra.fie
+
+ps.anc.liv <- prune_samples(sample_data(ps.anc.liv)$wheat == 'true', ps.anc.liv)
+ps.anc.liv  <- prune_taxa(taxa_sums(ps.anc.liv) > 0, ps.anc.liv)
+
+
+dist <- phyloseq::distance(ps.anc.liv, "euclidean")
+metadata <- as(sample_data(ps.anc.liv@sam_data), "data.frame")
+vegan::adonis2(dist ~ preparation, data = metadata)
+
+```
+
+
+
+```{r,fig.height=7, fig.width=9}
+
+amp_heatmap(amp.gra,
+            tax_show = 13,
+            tax_aggregate = "Phylum",tax_class = "Pseudomonadota",
+            group_by = "Group",
+            plot_values_size = 4, facet_by = "soil_type",
+            showRemainingTaxa = TRUE)
+
+
+```
+
+```{r, fig.height=13, fig.width=13}
+
+amp_heatmap(amp.gra,
+            tax_show = 40,
+            tax_aggregate = "Species",
+            tax_class = "Pseudomonadota",
+            tax_add = "Genus",
+            group_by = "Group",
+            plot_values_size = 4, facet_by = "soil_type",
+            showRemainingTaxa = TRUE)
+
+```
+
+
+```{r, fig.height=20, fig.width=11}
+
+amp_heatmap(amp.gra,
+            tax_show = 100,
+            tax_aggregate = "Genus",
+            tax_class = "Pseudomonadota",
+            tax_add = "Phylum",
+            group_by = "Group",
+            plot_values_size = 4, facet_by = "soil_type",
+            showRemainingTaxa = TRUE)
+
+```
+
+
+```{r, , fig.width=8, fig.height=8}
+
+physeq <- ps.gra.r
+
+veganifyOTU <- function(physeq){
+  require(phyloseq)
+  if(taxa_are_rows(physeq)){physeq <- t(physeq)}
+  return(as(otu_table(physeq), "matrix"))
+}
+
+otus.ps.vegan <- veganifyOTU(physeq)
+rownames(otus.ps.vegan) <- physeq@sam_data$Group
+metadata <- as(sample_data(physeq), "data.frame") 
+
+cca <- vegan::cca(otus.ps.vegan ~  рН + NH4 + NO3 + P + K + ear_count + ear_mass + sheaf_mass, data=metadata)
+
+biplot <- as.data.frame(cca$CCA$biplot)
+wa <- as.data.frame(cca$CCA$wa)
+
+biplot <- rownames_to_column(biplot, "Label") %>% 
+  add_column(Score = rep("biplot", length(rownames(biplot)))) %>% 
+  mutate(
+  Type = rep("biplot", length(rownames(biplot))),
+)
+
+wa <- rownames_to_column(wa, "Label") %>% 
+  add_column(Score = rep("sites", length(rownames(wa)))) %>% mutate(
+  Type = metadata$Group,
+)
+
+fdat_amazing <- rbind(biplot, wa) 
+
+fdat_amazing <- fdat_amazing %>%
+  mutate(label_size = ifelse(Score == "biplot", 4.5, 3)) %>% 
+  mutate_if(is.character, as.factor)
+
+summary.cca <- summary(cca)
+
+list.pe <- summary.cca$cont$importance %>% 
+  as.data.frame() %>% 
+  select(c("CCA1", "CCA2")) %>% 
+  dplyr::slice(2L) %>% 
+  t() %>% 
+  as.vector()
+
+fdat_amazing <- fdat_amazing %>%  
+  separate(Label, c("Label", NA), sep = '\\.', convert=TRUE)
+
+cca1 <- ggplot(fdat_amazing) + 
+  geom_vline(xintercept = 0, size = 0.75, color = "#737373", alpha=0.5) +
+  geom_hline(yintercept = 0, size = 0.75, color = "#737373", alpha=0.5) +
+  geom_point(data = fdat_amazing %>% 
+               dplyr::filter(Score == "sites"), mapping = aes(x=CCA1, y=CCA2, colour = factor(Score)))   + 
+  ggforce::geom_mark_ellipse(data = fdat_amazing %>%
+                                      dplyr::filter(Score == "sites"),
+                             aes(x=CCA1, y=CCA2, group = Label, label = Label, col = 'grey'),
+                      label.fontsize = 10,
+                      label.buffer = unit(2, "mm"),
+                      label.minwidth = unit(5, "mm"),
+                      con.cap = unit(0.1, "mm"),
+                  con.colour='salmon',
+                  label.colour='salmon'
+                  ) +
+  geom_segment(data = fdat_amazing %>% 
+                 dplyr::filter(Score == "biplot"), 
+               aes(x = 0, xend = CCA1, y = 0, yend = CCA2),
+               size = 0.6, 
+               alpha=0.8, 
+               color = "red",
+               arrow = arrow(angle = 3)) +
+  ggrepel::geom_text_repel(data = fdat_amazing %>% 
+                 dplyr::filter(Score == "biplot"), aes(x=CCA1, y=CCA2, label= Label), size=5) +
+  xlab(paste0(round(list.pe[1], 3)*100, "% CCA1")) +
+  ylab(paste0(round(list.pe[2], 3)*100, "% CCA2")) +
+  grids(linetype = "dashed") +
+  theme(legend.position = "none", 
+        panel.background = element_rect(fill = "white", colour = "grey50"))
+cca1
+
+```
+
+
+```{r, fig.width=12, fig.height=12}
+
+
+
+# physeq <- ps.clr
+physeq <- ps.gra.r
+
+veganifyOTU <- function(physeq){
+  require(phyloseq)
+  if(taxa_are_rows(physeq)){physeq <- t(physeq)}
+  return(as(otu_table(physeq), "matrix"))
+}
+
+otus.ps.vegan <- veganifyOTU(physeq)
+rownames(otus.ps.vegan) <- physeq@sam_data$Group
+metadata <- as(sample_data(physeq), "data.frame") 
+
+cca <- vegan::cca(otus.ps.vegan ~  рН + NH4 + NO3 + P + K + ear_count + ear_mass + sheaf_mass, data=metadata)
+
+wa <- as.data.frame(cca$CCA$v) %>% 
+  rownames_to_column("ID")
+
+taxa.pruned <- as.data.frame(physeq@tax_table@.Data) %>% 
+  rownames_to_column("ID")
+
+taxa.pruned <- taxa.pruned %>%  
+  mutate_all(as.character)
+
+# old.tips <- tree$tip.label
+# matches <- regmatches(tree$tip.label, gregexpr("[[:digit:]]+", tree$tip.label))
+# taxa.pruned$number <- as.numeric(unlist(matches))
+# Shitty taxa formating part
+
+taxa.pruned$taxa <- ifelse(is.na(taxa.pruned$Genus),
+                            ifelse(is.na(taxa.pruned$Family),
+                            ifelse(is.na(taxa.pruned$Order), 
+                            ifelse(is.na(taxa.pruned$Class), taxa.pruned$Phylum, taxa.pruned$Class) , taxa.pruned$Order), taxa.pruned$Family), taxa.pruned$Genus)
+taxa.pruned[taxa.pruned == "Burkholderia-Caballeronia-Paraburkholderia"] <- "Burkholderia"
+taxa.pruned[taxa.pruned == "Allorhizobium-Neorhizobium-Pararhizobium-Rhizobium"] <- "Pararhizobium"
+
+taxa.pruned$taxa2 <- ifelse(is.na(taxa.pruned$Species),
+                            with(taxa.pruned, paste0(taxa)),
+                            with(taxa.pruned, paste0(taxa, " ", Species )))
+taxa.pruned$phylum <- ifelse(taxa.pruned$Phylum == "Proteobacteria", with(taxa.pruned, paste0(taxa.pruned$Class)), with(taxa.pruned, paste0(taxa.pruned$Phylum)))
+taxa.pruned$Label <- paste0(taxa.pruned$ID, "_", taxa.pruned$taxa2)
+
+wa <- full_join(wa, taxa.pruned, by="ID") %>% 
+  mutate(Score = "sites")
+
+#For the top 50 most abundant taxa, skip if use des res
+head_asv <- physeq@otu_table@.Data %>% 
+  data.frame %>% 
+  colSums() %>% 
+  sort(decreasing = TRUE) %>% 
+  head(n=100) %>% 
+  names()
+  
+
+wa <- filter(wa, ID %in% head_asv)
+# maybe only different by des? Picture will be nice.
+# wa <- filter(wa, ID %in% row.des)
+# wa <- filter(wa, ID %in% row.des.so)
+
+biplot <- as.data.frame(cca$CCA$biplot)
+biplot <- rownames_to_column(biplot, "Label") %>% 
+  add_column(Score = rep("biplot", length(rownames(biplot))))
+
+fdat_amazing <- plyr::rbind.fill(biplot, wa) %>% 
+  
+  mutate(Label = as.factor(Label))
+fdat_amazing <- fdat_amazing %>%
+  mutate(label_size = ifelse(Score == "biplot", 4, 3))
+
+p.cca.species <- ggplot(fdat_amazing %>% filter(Score %in% c("sites","biplot"))) + 
+  geom_point(data = fdat_amazing %>% dplyr::filter(Score == "sites"), mapping = aes(x=CCA1, y=CCA2)) + 
+  geom_segment(data = fdat_amazing %>% dplyr::filter(Score == "biplot"), aes(x = 0, xend = CCA1, y = 0, yend = CCA2), alpha=0.8, color = "red", arrow = arrow(angle = 3)) +
+  geom_text_repel(aes(x=CCA1, y=CCA2, label= Label, colour = phylum),force=15, size=fdat_amazing$label_size) + 
+  xlab(paste0(round(list.pe[1], 3)*100, "% CCA1")) +
+  ylab(paste0(round(list.pe[2], 3)*100, "% CCA2")) +
+  grids(linetype = "dashed") +
+  geom_vline(xintercept = 0, size = 0.75, color = "#737373", alpha=0.5) +
+  geom_hline(yintercept = 0, size = 0.75, color = "#737373", alpha=0.5) +
+  theme(legend.position = "top", panel.background = element_rect(fill = "white", colour = "grey50"))
+
+
+p.cca.species
+
+```
+
+
+
+```{r, fig.width=12, fig.height=6}
+
+ggpubr::ggarrange(cca1, p.cca.species, common.legend = TRUE)
+
+```
+
+###  CCA
+
+
+```{r, , fig.width=8, fig.height=8}
+
+library(ggrepel)
+
+# physeq <- ps.clr
+physeq <- ps.gra.for.r
+
+veganifyOTU <- function(physeq){
+  require(phyloseq)
+  if(taxa_are_rows(physeq)){physeq <- t(physeq)}
+  return(as(otu_table(physeq), "matrix"))
+}
+
+otus.ps.vegan <- veganifyOTU(physeq)
+rownames(otus.ps.vegan) <- physeq@sam_data$Group
+metadata <- as(sample_data(physeq), "data.frame") 
+
+cca <- vegan::cca(otus.ps.vegan ~  рН + NH4 + NO3 + P + K, data=metadata)
+
+biplot <- as.data.frame(cca$CCA$biplot)
+wa <- as.data.frame(cca$CCA$wa)
+
+biplot <- rownames_to_column(biplot, "Label") %>% 
+  add_column(Score = rep("biplot", length(rownames(biplot)))) %>% 
+  mutate(
+  Type = rep("biplot", length(rownames(biplot))),
+)
+
+wa <- rownames_to_column(wa, "Label") %>% 
+  add_column(Score = rep("sites", length(rownames(wa)))) %>% mutate(
+  Type = metadata$Group,
+)
+
+fdat_amazing <- rbind(biplot, wa) 
+
+fdat_amazing <- fdat_amazing %>%
+  mutate(label_size = ifelse(Score == "biplot", 4.5, 3)) %>% 
+  mutate_if(is.character, as.factor)
+
+summary.cca <- summary(cca)
+
+list.pe <- summary.cca$cont$importance %>% 
+  as.data.frame() %>% 
+  dplyr::select(c("CCA1", "CCA2")) %>% 
+  dplyr::slice(2L) %>% 
+  t() %>% 
+  as.vector()
+
+fdat_amazing <- fdat_amazing %>%  
+  separate(Label, c("Label", NA), sep = '\\.', convert=TRUE)
+
+fdat_amazing[fdat_amazing == "NH4"] <- "NH4+"
+fdat_amazing[fdat_amazing == "NO3"] <- "NO3-"
+
+cca1 <- ggplot(fdat_amazing) + 
+  geom_vline(xintercept = 0, size = 0.75, color = "#737373", alpha=0.5) +
+  geom_hline(yintercept = 0, size = 0.75, color = "#737373", alpha=0.5) +
+  geom_point(data = fdat_amazing %>% 
+               dplyr::filter(Score == "sites"), mapping = aes(x=CCA1, y=CCA2, colour = factor(Score)))   + 
+  ggforce::geom_mark_ellipse(data = fdat_amazing %>%
+                                      dplyr::filter(Score == "sites"),
+                             aes(x=CCA1, y=CCA2, group = Label, 
+                                 # label = Label,
+                                 col = 'grey'),
+                      label.fontsize = 16,
+                      label.buffer = unit(2, "mm"),
+                      label.minwidth = unit(5, "mm"),
+                      con.cap = unit(0.1, "mm"),
+                  con.colour='salmon',
+                  label.colour='salmon'
+                  ) +
+  geom_segment(data = fdat_amazing %>% 
+                 dplyr::filter(Score == "biplot"), 
+               aes(x = 0, xend = CCA1, y = 0, yend = CCA2),
+               size = 0.6, 
+               alpha=0.8, 
+               color = "red",
+               arrow = arrow(angle = 3)) +
+  # ggrepel::geom_text_repel(data = fdat_amazing %>% 
+                 # dplyr::filter(Score == "biplot"), aes(x=CCA1, y=CCA2, label= Label), size=8) +
+  xlab(paste0(round(list.pe[1], 3)*100, "% CCA1")) +
+  ylab(paste0(round(list.pe[2], 3)*100, "% CCA2")) +
+  grids(linetype = "dashed") +
+  theme(legend.position = "none", 
+        panel.background = element_rect(fill = "white", colour = "grey50"),
+        axis.title = element_text(size=18),
+        axis.text = element_text(size=18))
+    
+
+cca.forest <- cca1 
+
+
+```
+
+```{r, , fig.width=8, fig.height=8}
+
+library(ggrepel)
+
+# physeq <- ps.clr
+physeq <- ps.gra.fal.r
+
+veganifyOTU <- function(physeq){
+  require(phyloseq)
+  if(taxa_are_rows(physeq)){physeq <- t(physeq)}
+  return(as(otu_table(physeq), "matrix"))
+}
+
+otus.ps.vegan <- veganifyOTU(physeq)
+rownames(otus.ps.vegan) <- physeq@sam_data$Group
+metadata <- as(sample_data(physeq), "data.frame") 
+
+cca <- vegan::cca(otus.ps.vegan ~  рН + NH4 + NO3 + P + K, data=metadata)
+
+biplot <- as.data.frame(cca$CCA$biplot)
+wa <- as.data.frame(cca$CCA$wa)
+
+biplot <- rownames_to_column(biplot, "Label") %>% 
+  add_column(Score = rep("biplot", length(rownames(biplot)))) %>% 
+  mutate(
+  Type = rep("biplot", length(rownames(biplot))),
+)
+
+wa <- rownames_to_column(wa, "Label") %>% 
+  add_column(Score = rep("sites", length(rownames(wa)))) %>% mutate(
+  Type = metadata$Group,
+)
+
+fdat_amazing <- rbind(biplot, wa) 
+
+fdat_amazing <- fdat_amazing %>%
+  mutate(label_size = ifelse(Score == "biplot", 4.5, 3)) %>% 
+  mutate_if(is.character, as.factor)
+
+summary.cca <- summary(cca)
+
+list.pe <- summary.cca$cont$importance %>% 
+  as.data.frame() %>% 
+  dplyr::select(c("CCA1", "CCA2")) %>% 
+  dplyr::slice(2L) %>% 
+  t() %>% 
+  as.vector()
+
+fdat_amazing <- fdat_amazing %>%  
+  separate(Label, c("Label", NA), sep = '\\.', convert=TRUE)
+
+fdat_amazing[fdat_amazing == "NH4"] <- "NH4+"
+fdat_amazing[fdat_amazing == "NO3"] <- "NO3-"
+
+cca1 <- ggplot(fdat_amazing) + 
+  geom_vline(xintercept = 0, size = 0.75, color = "#737373", alpha=0.5) +
+  geom_hline(yintercept = 0, size = 0.75, color = "#737373", alpha=0.5) +
+  geom_point(data = fdat_amazing %>% 
+               dplyr::filter(Score == "sites"), mapping = aes(x=CCA1, y=CCA2, colour = factor(Score)))   + 
+  ggforce::geom_mark_ellipse(data = fdat_amazing %>%
+                                      dplyr::filter(Score == "sites"),
+                             aes(x=CCA1, y=CCA2, group = Label, 
+                                 # label = Label,
+                                 col = 'grey'),
+                      label.fontsize = 16,
+                      label.buffer = unit(2, "mm"),
+                      label.minwidth = unit(5, "mm"),
+                      con.cap = unit(0.1, "mm"),
+                  con.colour='salmon',
+                  label.colour='salmon'
+                  ) +
+  geom_segment(data = fdat_amazing %>% 
+                 dplyr::filter(Score == "biplot"), 
+               aes(x = 0, xend = CCA1, y = 0, yend = CCA2),
+               size = 0.6, 
+               alpha=0.8, 
+               color = "red",
+               arrow = arrow(angle = 3)) +
+  # ggrepel::geom_text_repel(data = fdat_amazing %>% 
+                 # dplyr::filter(Score == "biplot"), aes(x=CCA1, y=CCA2, label= Label), size=8) +
+  xlab(paste0(round(list.pe[1], 3)*100, "% CCA1")) +
+  ylab(paste0(round(list.pe[2], 3)*100, "% CCA2")) +
+  grids(linetype = "dashed") +
+  theme(legend.position = "none", 
+        panel.background = element_rect(fill = "white", colour = "grey50"),
+        axis.title = element_text(size=18),
+        axis.text = element_text(size=18))
+cca.fallow <- cca1
+
+```
+
+```{r, , fig.width=8, fig.height=8}
+
+library(ggrepel)
+
+# physeq <- ps.clr
+physeq <- ps.gra.fie.r
+
+veganifyOTU <- function(physeq){
+  require(phyloseq)
+  if(taxa_are_rows(physeq)){physeq <- t(physeq)}
+  return(as(otu_table(physeq), "matrix"))
+}
+
+otus.ps.vegan <- veganifyOTU(physeq)
+rownames(otus.ps.vegan) <- physeq@sam_data$Group
+metadata <- as(sample_data(physeq), "data.frame") 
+
+cca <- vegan::cca(otus.ps.vegan ~  рН + NH4 + NO3 + P + K, data=metadata)
+
+biplot <- as.data.frame(cca$CCA$biplot)
+wa <- as.data.frame(cca$CCA$wa)
+
+biplot <- rownames_to_column(biplot, "Label") %>% 
+  add_column(Score = rep("biplot", length(rownames(biplot)))) %>% 
+  mutate(
+  Type = rep("biplot", length(rownames(biplot))),
+)
+
+wa <- rownames_to_column(wa, "Label") %>% 
+  add_column(Score = rep("sites", length(rownames(wa)))) %>% mutate(
+  Type = metadata$Group,
+)
+
+fdat_amazing <- rbind(biplot, wa) 
+
+fdat_amazing <- fdat_amazing %>%
+  mutate(label_size = ifelse(Score == "biplot", 4.5, 3)) %>% 
+  mutate_if(is.character, as.factor)
+
+summary.cca <- summary(cca)
+
+list.pe <- summary.cca$cont$importance %>% 
+  as.data.frame() %>% 
+  dplyr::select(c("CCA1", "CCA2")) %>% 
+  dplyr::slice(2L) %>% 
+  t() %>% 
+  as.vector()
+
+fdat_amazing <- fdat_amazing %>%  
+  separate(Label, c("Label", NA), sep = '\\.', convert=TRUE)
+
+fdat_amazing[fdat_amazing == "NH4"] <- "NH4+"
+fdat_amazing[fdat_amazing == "NO3"] <- "NO3-"
+
+cca1 <- ggplot(fdat_amazing) + 
+  geom_vline(xintercept = 0, size = 0.75, color = "#737373", alpha=0.5) +
+  geom_hline(yintercept = 0, size = 0.75, color = "#737373", alpha=0.5) +
+  geom_point(data = fdat_amazing %>% 
+               dplyr::filter(Score == "sites"), mapping = aes(x=CCA1, y=CCA2, colour = factor(Score)))   + 
+  ggforce::geom_mark_ellipse(data = fdat_amazing %>%
+                                      dplyr::filter(Score == "sites"),
+                             aes(x=CCA1, y=CCA2, group = Label, 
+                                 # label = Label,
+                                 col = 'grey'),
+                      label.fontsize = 16,
+                      label.buffer = unit(2, "mm"),
+                      label.minwidth = unit(5, "mm"),
+                      con.cap = unit(0.1, "mm"),
+                  con.colour='salmon',
+                  label.colour='salmon'
+                  ) +
+  geom_segment(data = fdat_amazing %>% 
+                 dplyr::filter(Score == "biplot"), 
+               aes(x = 0, xend = CCA1, y = 0, yend = CCA2),
+               size = 0.6, 
+               alpha=0.8, 
+               color = "red",
+               arrow = arrow(angle = 3)) +
+  # ggrepel::geom_text_repel(data = fdat_amazing %>% 
+                 # dplyr::filter(Score == "biplot"), aes(x=CCA1, y=CCA2, label= Label), size=8) +
+  xlab(paste0(round(list.pe[1], 3)*100, "% CCA1")) +
+  ylab(paste0(round(list.pe[2], 3)*100, "% CCA2")) +
+  grids(linetype = "dashed") +
+  theme(legend.position = "none", 
+        panel.background = element_rect(fill = "white", colour = "grey50"),
+        axis.title = element_text(size=18),
+        axis.text = element_text(size=18))
+
+cca.field <- cca1
+
+```
+
+```{r, fig.width=19, fig.height=7}
+
+ggpubr::ggarrange(cca.field, cca.fallow, cca.forest, nrow=1)
+
+```
+Since ggrepel does not support layers, the captions were added manually by my wife.
+
+## 16S network analysis
+
+```{r}
+
+ps.f2.fie <- phyloseq::filter_taxa(ps.gra.fie, function(x) sum(x > 10) > (0.2*length(x)), TRUE)
+ps.f2.for <- phyloseq::filter_taxa(ps.gra.for, function(x) sum(x > 10) > (0.2*length(x)), TRUE)
+ps.f2.fal <- phyloseq::filter_taxa(ps.gra.fal, function(x) sum(x > 10) > (0.2*length(x)), TRUE)
+
+```
+
+
+```{r, eval=FALSE}
+
+netfull.fal <- SpiecEasi::spiec.easi(ps.f2.fal, method='mb', icov.select.params=list(rep.num=100))
+netfull.fie <- SpiecEasi::spiec.easi(ps.f2.fie, method='mb', icov.select.params=list(rep.num=100))
+netfull.for <- SpiecEasi::spiec.easi(ps.f2.for, method='mb', icov.select.params=list(rep.num=100))
+
+saveRDS(netfull.fal, "netfull.fal")
+saveRDS(netfull.fie, "netfull.fie")
+saveRDS(netfull.for, "netfull.for")
+
+```
+
+```{r}
+
+netfull.fal <- readRDS("netfull.fal")
+netfull.fie <- readRDS("netfull.fie")
+netfull.for <- readRDS("netfull.for")
+
+```
+
+
+```{r,  fig.width=7, fig.height=7}
+
+igfull.for <- SpiecEasi::adj2igraph(getRefit(netfull.fal), vertex.attr=list(name=taxa_names(ps.f2.fal)))
+
+modfull.for <- cluster_walktrap(igfull.for)
+modularity(modfull.for)
+
+ig.for.mod <- igfull.for
+V(ig.for.mod)$color <-  modfull.for$membership
+
+set.seed(1516)
+
+pl_pal <-  viridis::magma(n = 35) 
+# option = "magma", aesthetics = "color", begin = 0.8, end = 0.001
+
+ggnet2(ig.for.mod, 
+        size ="0.7",
+       node.color = "color", 
+       label = FALSE, 
+       node.size = 2, 
+       label.size = 1,
+       mode = "kamadakawai") + 
+  guides(color=guide_legend(title="color"), size = FALSE)  + 
+  scale_color_manual(values = pl_pal) +
+    theme(legend.position="none")  + 
+  ggtitle('Fallow', subtitle = 'modularity - 0.217')
+
+
+```
+
+
+```{r,  fig.width=7, fig.height=7}
+
+igfull.for <- SpiecEasi::adj2igraph(getRefit(netfull.for), vertex.attr=list(name=taxa_names(ps.f2.for)))
+modfull.for <- cluster_walktrap(igfull.for)
+modularity(modfull.for)
+
+ig.for.mod <- igfull.for
+V(ig.for.mod)$color <-  modfull.for$membership
+
+set.seed(1516)
+
+pl_pal <-  viridis::magma(n = 35) 
+# option = "magma", aesthetics = "color", begin = 0.8, end = 0.001
+
+ggnet2(ig.for.mod, 
+        size ="0.7",
+       node.color = "color", 
+       label = FALSE,
+       node.size = 2, 
+       label.size = 4,
+       mode = "kamadakawai") + 
+  guides(color=guide_legend(title="color"), size = FALSE)  + 
+  scale_color_manual(values = pl_pal) +
+    theme(legend.position="none")  + 
+  ggtitle('Forest', subtitle = 'modularity - 0.241')
+
+
+```
+
+
+
+```{r,  fig.width=7, fig.height=7}
+
+igfull.for <- SpiecEasi::adj2igraph(getRefit(netfull.fie), vertex.attr=list(name=taxa_names(ps.f2.fie)))
+modfull.for <- cluster_walktrap(igfull.for)
+modularity(modfull.for)
+
+# modfull.for <- cluster_fast_greedy(igfull.for)
+# modularity(modfull.for)
+ig.for.mod <- igfull.for
+V(ig.for.mod)$color <-  modfull.for$membership
+
+set.seed(1516)
+
+pl_pal <-  viridis::magma(n = 22) 
+# option = "magma", aesthetics = "color", begin = 0.8, end = 0.001
+
+ggnet2(ig.for.mod, 
+        size ="0.7",
+       node.color = "color", 
+       label = FALSE,
+       node.size = 2, 
+       label.size = 4,
+       mode = "kamadakawai") + 
+  guides(color=guide_legend(title="color"), size = FALSE)  + 
+  scale_color_manual(values = pl_pal) +
+    theme(legend.position="none")  + 
+  ggtitle('Field', subtitle = 'modularity - 0.232')
+
+
+```
+
+In my opinion, there are no results to include in the publication. The networks for each soil type are similar.
+
+### WGCNA 
+
+```{r, cache=TRUE, eval=FALSE}
+
+readr::write_rds(ps.gra, 'ps.gra')
+
+out.gra <-  ANCOMBC::ancombc2(data=ps.gra, 
+  fix_formula = "soil_type + preparation + wheat",
+  prv_cut = 0,
+  p_adj_method = "BH",
+  tax_level = NULL,
+  rand_formula= NULL,
+  pseudo = 0, 
+  pseudo_sens = FALSE,
+  s0_perc = 0.05,
+  group = "Group",
+  struc_zero = FALSE,
+  neg_lb = TRUE,
+  alpha = 0.05,
+  n_cl = 4, 
+  verbose = TRUE,
+  global = FALSE, 
+  pairwise = FALSE, 
+  dunnet = FALSE, 
+  trend = FALSE
+)
+
+```
+
+
+```{r}
+
+out.gra <- read_rds("out.gra")
+ps.gra.anc <- norm_anc(ps.gra, out.gra)
+ps.gra.anc 
+
+```
+
+```{r,  fig.width=7, fig.height=7}
+
+beta_custom_norm_NMDS_elli_w(ps.gra.anc, Group = 'Group', Color = 'wheat')
+
+```
+
+
+```{r, fig.width=14, fig.height=5}
+
+ps.gra.anc.fie <- prune_samples(sample_data(ps.gra.anc)$soil_type == 'FI', ps.gra.anc)
+ps.gra.anc.fie  <- prune_taxa(taxa_sums(ps.gra.anc.fie) > 0, ps.gra.anc.fie)
+
+ps.gra.anc.for <- prune_samples(sample_data(ps.gra.anc)$soil_type == 'FO', ps.gra.anc)
+ps.gra.anc.for  <- prune_taxa(taxa_sums(ps.gra.anc.for) > 0, ps.gra.anc.for)
+
+ps.gra.anc.fal <- prune_samples(sample_data(ps.gra.anc)$soil_type == 'FA', ps.gra.anc)
+ps.gra.anc.fal  <- prune_taxa(taxa_sums(ps.gra.anc.fal) > 0, ps.gra.anc.fal)
+
+beta_anc_fal <- beta_custom_norm_PCA_elli_w(ps.gra.anc.fal, Group = 'Group', Color = 'wheat') 
+beta_anc_fie <- beta_custom_norm_PCA_elli_w(ps.gra.anc.fie, Group = 'Group', Color = 'wheat')
+beta_anc_for <- beta_custom_norm_PCA_elli_w(ps.gra.anc.for, Group = 'Group', Color = 'wheat')
+
+ggpubr::ggarrange(beta_anc_for, beta_anc_fal, beta_anc_fie,labels = c("Forest", "Fallow", "Field") ,ncol = 3)
+
+```
+
+
+
+```{r}
+
+ps.vst.mod <- ps.gra.anc.fie
+# ps.vst.mod@sam_data <- ps.vst.mod@sam_data %>%
+#   data.frame() %>%
+#   rownames_to_column('ID') %>% 
+#   mutate(Repeat = paste0(Repeat, "_", sapply(str_split(row.names(.), '\\.', 3), function(x) x[[3]]))
+#                          ) %>%
+#   sample_data()
+
+data3 <- ps.vst.mod@otu_table@.Data %>% 
+  as.data.frame()
+
+
+
+rownames(data3) <- paste0(
+    ps.vst.mod@sam_data$Group,
+    "_",
+    ps.vst.mod@sam_data %>% rownames() %>% sapply(., function(x) str_split(x, "\\.")[[1]][3]) %>% as.vector()
+  )
+
+powers <-  c(seq(from = 1, to=10, by=0.5), seq(from = 11, to=20, by=1))
+unregister <- function() {
+  env <- foreach:::.foreachGlobals
+  rm(list=ls(name=env), pos=env)
+}
+
+unregister()
+sft3 <-  WGCNA::pickSoftThreshold(data3, powerVector = powers, verbose = 5, networkType = "signed")
+
+plot(sft3$fitIndices[,1], -sign(sft3$fitIndices[,3])*sft3$fitIndices[,2], xlab="Soft Threshold (power)",ylab="Scale Free Topology Model Fit,signed R^2",type="n", main = paste("Scale independence"))
+text(sft3$fitIndices[,1], -sign(sft3$fitIndices[,3])*sft3$fitIndices[,2], labels=powers,cex=0.9,col="red")
+abline(h=0.9,col="salmon")
+
+```
+Selecting power 9.
+
+```{r}
+
+detachAllPackages()
+library(WGCNA)
+
+net3 <- WGCNA::blockwiseModules(data3,
+                          power=9,
+                          TOMType="signed",
+                          networkType="signed",
+                          nThreads=15)
+library(phyloseq)
+library(tidyverse)
+library(ggpubr)
+library(ampvis2)
+library(heatmaply)
+library(WGCNA)
+library(phyloseq)
+library(ggtree)
+library(tidyverse)
+
+
+# net3$colors %>% 
+#   unique()
+# mergedColors2 <-  WGCNA::labels2colors(net3$colors, colorSeq = c("pink","yellow","brown", "turquoise", "magenta","salmon", "green", "blue", "red" , "tan","greenyellow","purple" , "cyan","black", "gray"))
+
+mergedColors2 <-  WGCNA::labels2colors(net3$colors)
+plotDendroAndColors(
+  net3$dendrograms[[1]],
+  mergedColors2[net3$blockGenes[[1]]],
+  "Module colors",
+  dendroLabels = FALSE,
+  hang = 0.03,
+  addGuide = TRUE,
+  guideHang = 0.05)
+
+
+net3$colors %>% unique()
+net.w.a <- net3
+
+```
+
+There is a workaround related to poor package support. Reimport dependencies.
+
+
+```{r, fig.width=8, fig.height=14}
+
+modules_of_interest = mergedColors2 %>% 
+  unique()
+
+module_df <- data.frame(
+  asv = names(net3$colors),
+  colors = mergedColors2
+)
+
+# module_df[module_df == "yellow"] <- "salmon"
+
+submod <-  module_df %>%
+  subset(colors %in% modules_of_interest)
+
+row.names(module_df) = module_df$asv
+
+subexpr = as.data.frame(t(data3))[submod$asv,]
+
+submod_df <- data.frame(subexpr) %>%
+  mutate(
+    asv = row.names(.)
+  ) %>%
+  pivot_longer(-asv) %>%
+  mutate(
+    module = module_df[asv,]$colors
+  )
+
+submod_df <- submod_df %>% 
+  # mutate(name = gsub("\\_.*","",submod_df$name)) %>% 
+  group_by(name, asv) %>% 
+  summarise(value = mean(value), asv = asv, module = module) %>% 
+  relocate(c(asv, name, value, module)) %>% 
+  ungroup() %>% 
+  mutate(module = as.factor(module))
+
+p <- submod_df %>% 
+  ggplot(., aes(x=name, y=value, group=asv)) +
+  geom_line(aes(color = module),
+            alpha = 0.2) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90),
+    legend.position = "none") +
+  facet_grid(rows = vars(module)) +
+  labs(x = "day",
+       y = "normalized abundance")
+
+p + scale_color_manual(values = levels(submod_df$module))
+
+```
+
+WGCNA results are inconsistent, network connectivity is poorly associated with power, do not include in the article.
+
+## ANCOM-BC
+
+```{r, eval=FALSE}
+
+out.gra.pair.for <-  ANCOMBC::ancombc2(data=ps.f2.for, 
+  fix_formula = "preparation",
+  prv_cut = 0,
+  p_adj_method = "BH",
+  tax_level = NULL,
+  rand_formula= NULL,
+  pseudo = 0, 
+  pseudo_sens = TRUE,
+  s0_perc = 0.05,
+  group = "preparation",
+  struc_zero = TRUE,
+  neg_lb = TRUE,
+  alpha = 0.05,
+  n_cl = 20, 
+  verbose = TRUE,
+  global = TRUE, 
+  pairwise = TRUE, 
+  dunnet = FALSE, 
+  trend = FALSE
+  )
+
+out.gra.pair.fal <-  ANCOMBC::ancombc2(data=ps.f2.fal, 
+  fix_formula = "preparation",
+  prv_cut = 0,
+  p_adj_method = "BH",
+  tax_level = NULL,
+  rand_formula= NULL,
+  pseudo = 0, 
+  pseudo_sens = TRUE,
+  s0_perc = 0.05,
+  group = "Period",
+  struc_zero = TRUE,
+  neg_lb = TRUE,
+  alpha = 0.05,
+  n_cl = 20, 
+  verbose = TRUE,
+  global = TRUE, 
+  pairwise = TRUE, 
+  dunnet = FALSE, 
+  trend = FALSE
+  )
+
+out.gra.pair.fie <-  ANCOMBC::ancombc2(data=ps.f2.fie, 
+  fix_formula = "preparation",
+  prv_cut = 0,
+  p_adj_method = "BH",
+  tax_level = NULL,
+  rand_formula= NULL,
+  pseudo = 0, 
+  pseudo_sens = TRUE,
+  s0_perc = 0.05,
+  group = "preparation",
+  struc_zero = TRUE,
+  neg_lb = TRUE,
+  alpha = 0.05,
+  n_cl = 20, 
+  verbose = TRUE,
+  global = TRUE, 
+  pairwise = TRUE, 
+  dunnet = FALSE, 
+  trend = FALSE
+  )
+
+
+```
+
+
+
+
+```{r}
+
+ancbc_pair_for <- read_rds("out.gra.pair.for")
+ancbc_pair_fal <- read_rds("out.gra.pair.fal")
+ancbc_pair_fie <- read_rds("out.gra.pair.fie")
+
+q_list <-  filter(ancbc_pair_fie$res$diff_abn, GroupB2e == "TRUE") %>% 
+  pull(taxon)
+
+ancbc_pair_fie$res$lfc %>% 
+  filter(taxon %in% q_list) %>% 
+  mutate(More = ifelse(GroupB2e > 0, "more", "less")) %>% 
+  head(20)
+
+group_fal_qval <- filter(ancbc_pair_fal$res$diff_abn, GroupB1e == "TRUE") %>% 
+  rename_at(vars(contains("Group")), funs(str_replace(., ., "qvalue"))) %>% 
+  dplyr::select(c("taxon", "qvalue")) %>% 
+  dplyr:::rename("ID" = "taxon")
+
+group_fal <- ancbc_pair_fal$res$lfc %>%
+  rename_at(vars(contains("Group")), ~ str_replace(., ., "lfc")) %>% 
+  dplyr::select(c("taxon", "lfc")) %>% 
+  dplyr::rename("ID" = "taxon") %>% 
+  right_join(group_fal_qval) %>% 
+  mutate(Group = ifelse(lfc > 0, "more", "less")) %>% 
+  dplyr::select(c("ID", "Group"))
+
+```
+
+```{r, fig.height=12, fig.width=16}
+
+tx <- right_join(group_fal, ps.gra.anc@tax_table@.Data %>% data.frame() %>% rownames_to_column('ID')) %>% 
+  add_column(abnd = taxa_sums(ps.gra.anc)) %>% 
+  mutate(Group = replace_na(Group, "not_change"))
+
+tx %>% 
+  mutate(Phylum = case_when(Phylum %in% "Proteobacteria" ~ Class,
+                            !Phylum %in% "Proteobacteria" ~ Phylum) %>% as.factor()) %>% 
+  dplyr::select(c("Genus", "Phylum", "Group", "abnd")) %>% 
+  mutate(Group = as.factor(Group)) %>% 
+  group_by(Genus, Phylum, Group) %>%
+  mutate(Genus = str_replace_na(Genus, replacement = ' ') %>% as.factor()) %>% 
+  summarise(area = sum(abnd)) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  drop_na() %>% 
+  ggplot(aes(area = area, 
+             subgroup = Phylum, 
+             label = Genus,
+             fill = Group)) +
+  treemapify::geom_treemap() +
+  treemapify::geom_treemap_subgroup_border(color = "white") +
+  treemapify::geom_treemap_subgroup_text(place = "centre", 
+                                         grow = T, 
+                                         alpha = 0.7, 
+                                         colour = "black", 
+                                         fontface = "italic", 
+                                         min.size = 2) +
+  treemapify::geom_treemap_text(colour = "white", 
+                                place = "topleft", 
+                                grow = T, 
+                                reflow = T, 
+                                layout = 'squarified',
+                                min.size = 4) +
+  scale_colour_viridis_d(option = "plasma", 
+                         aesthetics = "fill", 
+                         begin = 0.2, 
+                         end = 0.7) +
+  theme(legend.position="bottom") 
+
+
+
+```
+
+
+```{r, fig.height=12, fig.width=16}
+
+group_fal_qval <- filter(ancbc_pair_fie$res$diff_abn, GroupB2e == "TRUE") %>% 
+  rename_at(vars(contains("Group")), funs(str_replace(., ., "qvalue"))) %>% 
+  dplyr::select(c("taxon", "qvalue")) %>% 
+  dplyr::rename("ID" = "taxon")
+
+group_fie <- ancbc_pair_fie$res$lfc %>%
+  rename_at(vars(contains("Group")), ~ str_replace(., ., "lfc")) %>% 
+  dplyr::select(c("taxon", "lfc")) %>% 
+  dplyr::rename("ID" = "taxon") %>% 
+  right_join(group_fal_qval) %>% 
+  mutate(Group = ifelse(lfc > 0, "more", "less")) %>% 
+  dplyr::select(c("ID", "Group"))
+
+
+tx <- right_join(group_fie, ps.gra.anc@tax_table@.Data %>% data.frame() %>% rownames_to_column('ID')) %>% 
+  add_column(abnd = taxa_sums(ps.gra.anc)) %>% 
+  mutate(Group = replace_na(Group, "not_change"))
+
+# write_tsv(tx, "tx_field.tsv")
+
+tx %>% 
+  mutate(Phylum = case_when(Phylum %in% "Proteobacteria" ~ Class,
+                            !Phylum %in% "Proteobacteria" ~ Phylum) %>% as.factor()) %>% 
+  dplyr::select(c("Genus", "Phylum", "Group", "abnd")) %>% 
+  mutate(Group = as.factor(Group)) %>% 
+  group_by(Genus, Phylum, Group) %>%
+  mutate(Genus = str_replace_na(Genus, replacement = ' ') %>% as.factor()) %>% 
+  summarise(area = sum(abnd)) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  drop_na() %>% 
+  ggplot(aes(area = area, 
+             subgroup = Phylum, 
+             label = Genus,
+             fill = Group)) +
+  treemapify::geom_treemap() +
+  treemapify::geom_treemap_subgroup_border(color = "white") +
+  treemapify::geom_treemap_subgroup_text(place = "centre", 
+                                         grow = T, 
+                                         alpha = 0.7, 
+                                         colour = "black", 
+                                         fontface = "italic", 
+                                         min.size = 2) +
+  treemapify::geom_treemap_text(colour = "white", 
+                                place = "topleft", 
+                                grow = T, 
+                                reflow = T, 
+                                layout = 'squarified',
+                                min.size = 4) +
+  scale_colour_viridis_d(option = "plasma", 
+                         aesthetics = "fill", 
+                         begin = 0.2, 
+                         end = 0.7) +
+  theme(legend.position="bottom") 
+
+
+
+```
+
+
+
+
+```{r, fig.height=12, fig.width=16}
+
+group_for_qval <- filter(ancbc_pair_for$res$diff_abn, GroupB3e == "TRUE") %>% 
+  rename_at(vars(contains("Group")), funs(str_replace(., ., "qvalue"))) %>% 
+  dplyr::select(c("taxon", "qvalue")) %>% 
+  dplyr::rename("ID" = "taxon")
+
+group_for <- ancbc_pair_for$res$lfc %>%
+  rename_at(vars(contains("Group")), ~ str_replace(., ., "lfc")) %>% 
+  dplyr::select(c("taxon", "lfc")) %>% 
+  dplyr::rename("ID" = "taxon") %>% 
+  right_join(group_fal_qval) %>% 
+  mutate(Group = ifelse(lfc > 0, "more", "less")) %>% 
+  dplyr::select(c("ID", "Group"))
+
+
+tx <- right_join(group_for, ps.gra.anc@tax_table@.Data %>% data.frame() %>% rownames_to_column('ID')) %>% 
+  add_column(abnd = taxa_sums(ps.gra.anc)) %>% 
+  mutate(Group = replace_na(Group, "not_change"))
+
+write_tsv(tx, "tx_forest.tsv")
+
+tx %>% 
+  mutate(Phylum = case_when(Phylum %in% "Proteobacteria" ~ Class,
+                            !Phylum %in% "Proteobacteria" ~ Phylum) %>% as.factor()) %>% 
+  dplyr::select(c("Genus", "Phylum", "Group", "abnd")) %>% 
+  mutate(Group = as.factor(Group)) %>% 
+  group_by(Genus, Phylum, Group) %>%
+  mutate(Genus = str_replace_na(Genus, replacement = ' ') %>% as.factor()) %>% 
+  summarise(area = sum(abnd)) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  drop_na() %>% 
+  ggplot(aes(area = area, 
+             subgroup = Phylum, 
+             label = Genus,
+             fill = Group)) +
+  treemapify::geom_treemap() +
+  treemapify::geom_treemap_subgroup_border(color = "white") +
+  treemapify::geom_treemap_subgroup_text(place = "centre", 
+                                         grow = T, 
+                                         alpha = 0.7, 
+                                         colour = "black", 
+                                         fontface = "italic", 
+                                         min.size = 2) +
+  treemapify::geom_treemap_text(colour = "white", 
+                                place = "topleft", 
+                                grow = T, 
+                                reflow = T, 
+                                layout = 'squarified',
+                                min.size = 4) +
+  scale_colour_viridis_d(option = "plasma", 
+                         aesthetics = "fill", 
+                         begin = 0.2, 
+                         end = 0.7) +
+  theme(legend.position="bottom") 
+
+
+
+```
+
+
+
+```{r}
+
+all_sum <- sum(tx$abnd)
+
+tx %>% 
+  group_by(Group) %>% 
+  summarise(n(), sum(abnd)/all_sum*100)
+
+```
+
+
+```{r}
+
+group_for_mod <- group_for %>% 
+  dplyr::rename("Forest" = "Group")
+
+group_fal_mod <- group_fal %>% 
+  dplyr::rename("Fallow" = "Group")
+
+group_fie_mod <- group_fie %>% 
+  dplyr::rename("Field" = "Group")
+
+full_join(group_for_mod, full_join(group_fal_mod, group_fie_mod)) %>%
+  pivot_longer(-ID, values_to = "Change") %>%
+  drop_na() %>% 
+  ggplot(aes(x=name, fill=Change)) +
+  ylab("ASVs count") +
+  xlab("") +
+  geom_bar() +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    legend.text=element_text(size=13)
+    )
+
+```
+
+```{r}
+
+group_fal_mod <- group_fal %>% 
+  dplyr::rename(fal_lfc = Group)
+
+group_fie_mod <- group_fie %>% 
+  dplyr::rename(fie_lfc = Group )
+
+group_for <- full_join(group_fal_mod, group_fie_mod) %>% 
+  # drop_na() %>%
+  replace(is.na(.), 0) %>% 
+  mutate(fie_lfc = as.factor(fie_lfc)) %>% 
+  filter(fie_lfc == 'more' & fal_lfc != "more") %>%
+  left_join(ps.gra.anc@tax_table@.Data %>% data.frame() %>% rownames_to_column('ID')) %>% 
+  arrange(fie_lfc) %>% 
+  dplyr::rename("Group" = "fie_lfc") %>% 
+  select(c("ID", "Group"))
+
+```
+
+
+```{r, fig.height=8, fig.width=10}
+
+
+tx <- right_join(group_fal, ps.gra.anc@tax_table@.Data %>% data.frame() %>% rownames_to_column('ID')) %>% 
+  add_column(abnd = taxa_sums(ps.gra.anc)) %>% 
+  mutate(Group = replace_na(as.character(Group), "not_change"))
+
+tx %>% 
+  mutate(Phylum = case_when(Phylum %in% "Proteobacteria" ~ Class,
+                            !Phylum %in% "Proteobacteria" ~ Phylum) %>% as.factor()) %>% 
+  filter(Phylum == "Actinobacteriota") %>% 
+  dplyr::select(c("Genus", "Family", "Group", "abnd")) %>% 
+  mutate(Group = as.factor(Group)) %>% 
+  group_by(Genus, Family, Group) %>%
+  mutate(Genus = str_replace_na(Genus, replacement = ' ') %>% as.factor()) %>% 
+  summarise(area = sum(abnd)) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  drop_na() %>% 
+  ggplot(aes(area = area, 
+             subgroup = Family, 
+             label = Genus,
+             fill = Group)) +
+  treemapify::geom_treemap() +
+  treemapify::geom_treemap_subgroup_border(color = "white") +
+  treemapify::geom_treemap_subgroup_text(place = "centre", 
+                                         grow = T, 
+                                         alpha = 0.7, 
+                                         colour = "black", 
+                                         fontface = "italic", 
+                                         min.size = 2) +
+  treemapify::geom_treemap_text(colour = "white", 
+                                place = "topleft", 
+                                grow = T, 
+                                reflow = T, 
+                                layout = 'squarified',
+                                min.size = 4) +
+  scale_colour_viridis_d(option = "plasma", 
+                         aesthetics = "fill", 
+                         begin = 0.2, 
+                         end = 0.7) +
+  theme(legend.position="bottom") 
+
+
+
+```
+
+
+```{r}
+
+
+tx %>% 
+  # replace(is.na(.), 0) %>% 
+  pivot_wider(names_from = Group, values_from = abnd) %>% 
+  mutate_if(is.numeric , replace_na, replace = 0) %>% 
+  group_by(Phylum) %>% 
+  summarise(del = ((not_change - more)/sum(not_change + more)) %>% sum()) %>% 
+  arrange(del) %>% 
+  filter(del != 1)
+
+```
+```{r}
+
+tx %>% 
+  filter(Phylum == "Actinobacteriota") %>% 
+  # replace(is.na(.), 0) %>% 
+  pivot_wider(names_from = Group, values_from = abnd) %>% 
+  mutate_if(is.numeric , replace_na, replace = 0) %>% 
+  group_by(Family, Genus) %>% 
+  summarise(del = ((not_change - more)/sum(not_change + more)) %>% sum()) %>% 
+  arrange(del) %>% 
+  filter(del != 1)
+
+```
+
+
+```{r}
+
+tx %>% 
+  filter(Group == "more") %>% 
+  arrange(abnd) %>% 
+  head(20)
+
+```
+
+
+### Addition
+
+A quick look at which ASVs change the most based on frequency. Request from the supervisor.
+
+
+```{r}
+
+abnd <- taxa_sums(ps.gra.anc) %>% 
+  data.frame() %>% 
+  rownames_to_column("taxon") %>% 
+  dplyr::rename(abnd = ".")
+
+lfc_fallow <- left_join(ancbc_pair_fal$res$lfc, abnd) %>% 
+  dplyr::rename(LogFC = GroupB1e) %>%  
+  # mutate(mode = abs(LogFC)) %>%  
+  ggplot(aes(y = LogFC, x = abnd)) +
+  # geom_smooth() +
+  geom_point(alpha=0.3) + theme_bw()
+
+
+
+```
+```{r}
+
+abnd <- taxa_sums(ps.gra.anc) %>% 
+  data.frame() %>% 
+  rownames_to_column("taxon") %>% 
+  dplyr::rename(abnd = ".")
+
+lfc_forest <- left_join(ancbc_pair_for$res$lfc, abnd) %>% 
+  dplyr::rename(LogFC = GroupB3e) %>%  
+  # mutate(mode = abs(LogFC)) %>%  
+  ggplot(aes(y = LogFC, x = abnd)) +
+  # geom_smooth() +
+  geom_point(alpha=0.3) + theme_bw()
+
+```
+```{r}
+
+abnd <- taxa_sums(ps.gra.anc) %>% 
+  data.frame() %>% 
+  rownames_to_column("taxon") %>% 
+  dplyr::rename(abnd = ".")
+
+
+lfc_field <- left_join(ancbc_pair_fie$res$lfc, abnd) %>% 
+  dplyr::rename(LogFC = GroupB2e) %>%  
+  # mutate(mode = abs(LogFC)) %>%  
+  ggplot(aes(y = LogFC, x = abnd)) +
+  # geom_smooth() +
+  geom_point(alpha=0.3) + theme_bw()
+```
+```{r, fig.width=14, fig.height=5}
+
+ggarrange(lfc_forest, lfc_fallow, lfc_field, nrow = 1, labels = c("Forest", "Falow", "Field")) 
+
+```
+
+```{r}
+
+abnd <- taxa_sums(ps.gra.anc) %>% 
+  data.frame() %>% 
+  rownames_to_column("taxon") %>% 
+  dplyr::rename(abnd = ".")
+
+lfc_field <- left_join(ancbc_pair_fie$res$lfc, abnd) %>% 
+  rename(LogFC = GroupB2e) %>%  
+  ggplot(aes(y = abnd, x = LogFC)) +
+  geom_point() + theme_bw()
+
+left_join(ancbc_pair_fie$res$lfc, abnd) %>% 
+  rename(LogFC = GroupB2e) %>%  
+  mutate(mode = abs(LogFC)) %>%  
+  ggplot(aes(y = mode, x = abnd)) +
+  geom_smooth() +
+  geom_point(alpha=0.3) + theme_bw()
+
+
+```
+
+
+## Packages info
+
+```{r}
+
+sessionInfo()
+
+```
